@@ -7,9 +7,9 @@ clc
 clear
 % clc
 
-addpath 'C:/Users/11424/Documents/phd/Movements of Different Frequency'
-folder1 = 'C:/Users/11424/Documents/phd/Movements of Different Frequency/pwm_37';
-folder2 = 'C:/Users/11424/Documents/phd/Movements of Different Frequency/pwm_40';
+addpath 'C:/Users/11424/Documents/phd/pytorch_experiment_nc/Movements of Different Frequency'
+folder1 = 'C:/Users/11424/Documents/phd/pytorch_experiment_nc/Movements of Different Frequency/pwm_37';
+folder2 = 'C:/Users/11424/Documents/phd/pytorch_experiment_nc/Movements of Different Frequency/pwm_40';
 repeats =50;
 rep_time=100;
 max_iter=100;
@@ -163,6 +163,7 @@ refined_start_indices_class2=refined_start_indices_class2+399;
 %%
 for i = 1 : repeats
 [max_class1(i),start_class1(i)] = max(tclass1_x(refined_start_indices_class1(i):refined_start_indices_class1(i)+200,1));
+
 [max_class2(i),start_class2(i)] = max(tclass2_x(refined_start_indices_class2(i):refined_start_indices_class2(i)+200,1));
 end
 
