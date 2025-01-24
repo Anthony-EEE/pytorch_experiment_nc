@@ -225,34 +225,43 @@ def visualize_data(inputs, labels, sample_count=5):
         plt.show()
 
 
-# class RNNClassifier(nn.Module):
-#     def __init__(self, input_dim, hidden_dim, num_classes):
-#         super(RNNClassifier, self).__init__()
-#         self.rnn = nn.RNN(input_dim, hidden_dim, batch_first=True, nonlinearity='relu', dropout=0.2, num_layers=2, bidirectional=False)
-#         self.fc = nn.Linear(hidden_dim, num_classes)
-
-#     def forward(self, x):
-#         _, hidden = self.rnn(x)  # hidden: [num_layers, batch_size, hidden_dim]
-#         output = self.fc(hidden[-1])  # Use the last layer's hidden state
-#         return output
-
-class RNNClassifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_classes):
-        super(RNNClassifier, self).__init__()
-        self.rnn = nn.RNN(
+class LSTMClassifier(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_classes, num_layers=1, dropout=0.2):
+        super(LSTMClassifier, self).__init__()
+        self.lstm = nn.LSTM(
             input_dim, 
             hidden_dim, 
+            num_layers=num_layers, 
             batch_first=True, 
-            nonlinearity='relu', 
-            dropout=0.2, 
-            num_layers=2, 
+            dropout=dropout, 
             bidirectional=True
         )
-        self.fc = nn.Linear(hidden_dim * 2, num_classes)  # Adjust for bidirectional (hidden_dim * 2)
+        self.fc = nn.Linear(hidden_dim * 2, num_classes)  # Adjust for bidirectional LSTM
 
     def forward(self, x):
-        _, hidden = self.rnn(x)  # hidden: [num_layers * num_directions, batch_size, hidden_dim]
+        _, (hidden, _) = self.lstm(x)  # hidden: [num_layers * num_directions, batch_size, hidden_dim]
         # Concatenate the last hidden state of both directions
         hidden = torch.cat((hidden[-2], hidden[-1]), dim=1)  # Shape: [batch_size, hidden_dim * 2]
         logits = self.fc(hidden)  # Pass through fully connected layer
         return logits
+
+# class RNNClassifier(nn.Module):
+#     def __init__(self, input_dim, hidden_dim, num_classes):
+#         super(RNNClassifier, self).__init__()
+#         self.rnn = nn.RNN(
+#             input_dim, 
+#             hidden_dim, 
+#             batch_first=True, 
+#             nonlinearity='relu', 
+#             dropout=0.2, 
+#             num_layers=2, 
+#             bidirectional=True
+#         )
+#         self.fc = nn.Linear(hidden_dim * 2, num_classes)  # Adjust for bidirectional (hidden_dim * 2)
+
+#     def forward(self, x):
+#         _, hidden = self.rnn(x)  # hidden: [num_layers * num_directions, batch_size, hidden_dim]
+#         # Concatenate the last hidden state of both directions
+#         hidden = torch.cat((hidden[-2], hidden[-1]), dim=1)  # Shape: [batch_size, hidden_dim * 2]
+#         logits = self.fc(hidden)  # Pass through fully connected layer
+#         return logits

@@ -188,45 +188,24 @@ from tqdm import tqdm
 #     plt.show()
 
 def loov_evaluation(dataset, model_class, input_dim, hidden_dim, num_classes, num_epochs, learning_rate, device):
-    """
-    Performs Leave-One-Out Validation with randomly chosen samples from each class as the test set
-    and calculates average time-step accuracies for multiple iterations.
-
-    Args:
-        dataset (Dataset): The entire dataset.
-        model_class (nn.Module): The model class to be instantiated.
-        input_dim (int): Input dimension of the data (e.g., 3 for Rx, Ry, Rz).
-        hidden_dim (int): Hidden layer size.
-        num_classes (int): Number of output classes.
-        num_epochs (int): Number of epochs for training.
-        learning_rate (float): Learning rate for the optimizer.
-        device (torch.device): Device to run the computation on.
-
-    Returns:
-        np.ndarray: Average time-step accuracies across all iterations.
-    """
-    # Split the dataset into class 1 and class 2
+    # Split dataset into class indices
     class_1_indices = [i for i in range(len(dataset)) if dataset[i][1] == 0]
     class_2_indices = [i for i in range(len(dataset)) if dataset[i][1] == 1]
 
-    total_iterations = 100  # Number of LOOV iterations
-    sequence_length = 100  # Assume sequence length is 100
-    time_step_accuracies = np.zeros((total_iterations, sequence_length))  # [iterations, time steps]
+    total_iterations = 100
+    sequence_length = 100
+    time_step_accuracies = np.zeros((total_iterations, sequence_length))
 
     for iteration in tqdm(range(total_iterations), desc="LOOV Iterations"):
-        # Randomly select 1 sample from each class for the test set
+        # Select test indices
         test_class_1 = random.sample(class_1_indices, 1)
         test_class_2 = random.sample(class_2_indices, 1)
         test_indices = test_class_1 + test_class_2
 
-        # Use the rest for training
+        # Train/Test split
         train_indices = list(set(range(len(dataset))) - set(test_indices))
-
-        # Create train and test datasets
         train_dataset = Subset(dataset, train_indices)
         test_dataset = Subset(dataset, test_indices)
-
-        # DataLoaders
         train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False)
 
@@ -235,60 +214,41 @@ def loov_evaluation(dataset, model_class, input_dim, hidden_dim, num_classes, nu
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-        # Train the model
+        # Training loop
         model.train()
-        epoch_losses = []
         for epoch in range(num_epochs):
-            epoch_loss = 0
             for batch_data, batch_labels in train_loader:
                 batch_data = batch_data.to(device)
                 batch_labels = batch_labels.long().to(device)
-
                 optimizer.zero_grad()
                 outputs = model(batch_data)
                 loss = criterion(outputs, batch_labels)
                 loss.backward()
                 optimizer.step()
 
-                epoch_loss += loss.item()
-
-            epoch_losses.append(epoch_loss / len(train_loader))
-
-        # # Plot training loss per iteration
-        # plt.plot(range(num_epochs), epoch_losses, label=f'Iteration {iteration+1}')
-        # plt.title("Loss Plot")
-        # plt.xlabel("Epoch")
-        # plt.ylabel("Loss")
-        # plt.legend()
-        # plt.grid()
-        # plt.show()
-
-        # Evaluate the model
+        # Evaluation loop
         model.eval()
         with torch.no_grad():
+            step_sample_counts = np.zeros(sequence_length)
             for batch_data, batch_labels in test_loader:
                 batch_data = batch_data.to(device)
                 batch_labels = batch_labels.long().to(device)
+                for t in range(batch_data.size(1)):
+                    step_input = batch_data[:, :t+1, :]
+                    step_output, _ = model.lstm(step_input)
+                    final_output = step_output[:, -1, :]
+                    logits = model.fc(final_output)
+                    step_pred = torch.argmax(logits, dim=1)
+                    correct = (step_pred == batch_labels).float().sum().item()
+                    time_step_accuracies[iteration, t] += correct
+                    step_sample_counts[t] += batch_labels.size(0)
+            
+            # Normalize accuracies
+            step_sample_counts[step_sample_counts == 0] = 1  # Avoid division by zero
+            time_step_accuracies[iteration, :] /= step_sample_counts
 
-                for t in range(batch_data.size(1)):  # Iterate over sequence_length (100)
-                    step_input = batch_data[:, :t+1, :]  # Use data up to time step t
-
-                    step_output, _ = model.rnn(step_input)  # RNN output: [batch_size, t+1, hidden_dim]
-                    final_output = step_output[:, -1, :]  # Last time step's output
-                    logits = model.fc(final_output)  # [batch_size, num_classes]
-
-                    step_pred = torch.argmax(logits, dim=1)  # Predictions for this step
-                    correct = (step_pred == batch_labels).sum().item()
-                    time_step_accuracies[iteration, t] += correct / batch_labels.size(0)  # Normalize by batch size
-
-        print(f"Iteration {iteration+1}/{total_iterations} completed.")
-
-    # Average accuracies across all iterations for each time step
     average_time_step_accuracies = np.mean(time_step_accuracies, axis=0)
-
-    # Print final average time-step accuracies
-    print(f"Average Time-Step Accuracies: {average_time_step_accuracies}")
-
+    print(f"Final Average Time-Step Accuracies: {average_time_step_accuracies}")
     return average_time_step_accuracies
 
 if __name__ == '__main__':
@@ -318,10 +278,10 @@ if __name__ == '__main__':
 
     # Model configurations
     input_dim = 3  # Number of features (Rx, Ry, Rz)
-    hidden_dim = 64  # Number of hidden units
+    hidden_dim = 128  # Number of hidden units
     num_classes = 2  # Number of classes
     num_epochs = 30  # Number of training epochs
-    learning_rate = 0.001  # Learning rate
+    learning_rate = 0.005  # Learning rate
 
     dataset_sensor_1 = RotationDataset(rotation_class_1, rotation_class_2, 0, 4, 8)
 
@@ -336,7 +296,7 @@ if __name__ == '__main__':
 
         # Perform LOOV evaluation
         average_time_step_accuracies = loov_evaluation(
-            dataset_sensor, RNNClassifier, input_dim, hidden_dim, num_classes, num_epochs, learning_rate, device
+            dataset_sensor, LSTMClassifier, input_dim, hidden_dim, num_classes, num_epochs, learning_rate, device
         )
 
         # Store results
