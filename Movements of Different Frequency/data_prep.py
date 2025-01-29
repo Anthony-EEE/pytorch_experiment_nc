@@ -5,6 +5,7 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader, Subset
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
 
 # Data Processing
 class DataProcessor:
@@ -42,6 +43,41 @@ class DataProcessor:
     #         delta = -data[0, i]  # Calculate delta to make the first value zero
     #         data[:, i] += delta  # Add delta to all rows in the column
     #     return pd.DataFrame(data, columns=df.columns)
+    def minmax_normalize_together(self, rot_class_1, rot_class_2):
+        """
+        Applies Min-Max normalization to the extracted datasets together, tuple by tuple.
+
+        Args:
+            rot_class_1 (numpy.ndarray): Extracted sequence data for class 1 (shape: [samples, sequence_length, features]).
+            rot_class_2 (numpy.ndarray): Extracted sequence data for class 2 (shape: [samples, sequence_length, features]).
+
+        Returns:
+        Tuple[numpy.ndarray, numpy.ndarray]: Min-Max normalized datasets for both classes.
+        """
+        scaler = MinMaxScaler()
+
+        # Combine both classes for joint scaling
+        combined = np.concatenate([rot_class_1, rot_class_2], axis=0)  # Shape: (total_samples, sequence_length, features)
+        num_samples_1 = rot_class_1.shape[0]
+
+        # Number of triplets (each triplet corresponds to an (Rx, Ry, Rz) set)
+        num_triplets = combined.shape[-1] // 3
+
+        # Reshape into (samples * sequence_length, triplets, 3) for proper tuple-wise scaling
+        combined_reshaped = combined.reshape(-1, num_triplets, 3)  # Shape: (total_samples * sequence_length, num_triplets, 3)
+
+        # Apply Min-Max scaling tuple by tuple
+        for i in range(num_triplets):
+            combined_reshaped[:, i, :] = scaler.fit_transform(combined_reshaped[:, i, :])
+
+        # Reshape back to original format
+        combined_scaled = combined_reshaped.reshape(combined.shape)
+
+        # Split the normalized data back into class 1 and class 2
+        rot_class_1_scaled = combined_scaled[:num_samples_1]
+        rot_class_2_scaled = combined_scaled[num_samples_1:]
+
+        return rot_class_1_scaled, rot_class_2_scaled
     def apply_zero_mean_pair(self, df_class_1, df_class_2):
         """
         Adjust the data in two DataFrames so that the first value in each column of df_class_1 becomes zero,
@@ -153,6 +189,9 @@ class DataProcessor:
         rotation_x_class_1, rotation_x_class_2 = self.apply_zero_mean_pair(rotation_x_class_1, rotation_x_class_2)
         rotation_y_class_1, rotation_y_class_2 = self.apply_zero_mean_pair(rotation_y_class_1, rotation_y_class_2)
         rotation_z_class_1, rotation_z_class_2 = self.apply_zero_mean_pair(rotation_z_class_1, rotation_z_class_2)
+        # # Apply Min-Max Normalization to each triplet
+        # rotation_x_class_1, rotation_y_class_1, rotation_z_class_1, rotation_x_class_2, rotation_y_class_2, rotation_z_class_2= self.minmax_normalize_together(rotation_x_class_1, rotation_y_class_1, rotation_z_class_1, 
+        #                                                                                                 rotation_x_class_2, rotation_y_class_2, rotation_z_class_2)
         print("Rotation Class 1", rotation_x_class_1.iloc[0, :])
         print("Rotation Class 2", rotation_x_class_2.iloc[0, :])
         # rotation_z_class_2 = self.apply_zero_mean(rotation_z_class_2)
@@ -166,32 +205,74 @@ class DataProcessor:
         rotation_class_2 = self.construct_dataset(start_indices_class2, rotation_x_class_2, rotation_y_class_2, rotation_z_class_2, sequence_length=self.t)
         # print("Rotation Class 2", rotation_class_2[0][0])
         # print(rotation_class_2.shape)
+        # Apply Min-Max Normalization **after** sequence extraction
+        rotation_class_1, rotation_class_2 = self.minmax_normalize_together(rotation_class_1, rotation_class_2)
         return rotation_class_1, rotation_class_2
     
 class RotationDataset(Dataset):
     def __init__(self, class_1, class_2, x_column, y_column, z_column):
-        """
-        Args:
-            class_1 (np.ndarray or torch.Tensor): Dataset for class 1 with shape (50, 100, 12)
-            class_2 (np.ndarray or torch.Tensor): Dataset for class 2 with shape (50, 100, 12)
-        """
         class_1 = class_1[:, :, [x_column, y_column, z_column]]
         class_2 = class_2[:, :, [x_column, y_column, z_column]]
-        # Convert to PyTorch tensors if they're NumPy arrays
+
         if isinstance(class_1, np.ndarray):
             class_1 = torch.tensor(class_1, dtype=torch.float32)
         if isinstance(class_2, np.ndarray):
             class_2 = torch.tensor(class_2, dtype=torch.float32)
         
-        # Combine datasets and create labels
-        self.data = torch.cat([class_1, class_2], dim=0)  # Combine along the first dimension
-        self.labels = torch.cat([torch.zeros(class_1.size(0)), torch.ones(class_2.size(0))])  # 0 for class_1, 1 for class_2
+        # # Concatenate for min-max scaling
+        # combined = torch.cat([class_1, class_2], dim=0)
+        
+        # # Compute min and max per feature (across all time steps and samples)
+        # min_val = combined.min(dim=0, keepdim=True)[0].min(dim=1, keepdim=True)[0]
+        # max_val = combined.max(dim=0, keepdim=True)[0].max(dim=1, keepdim=True)[0]
+        
+        # # Avoid division by zero
+        # range_val = max_val - min_val
+        # range_val[range_val == 0] = 1
+        
+        # # Normalize to [-1, 1]
+        # class_1 = 2 * (class_1 - min_val) / range_val - 1
+        # class_2 = 2 * (class_2 - min_val) / range_val - 1
+        
+        # Store data and labels
+        self.data = torch.cat([class_1, class_2], dim=0)
+        self.labels = torch.cat([torch.zeros(class_1.size(0)), torch.ones(class_2.size(0))])  
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
+
+# class RotationDataset(Dataset):
+#     def __init__(self, class_1, class_2, x_column, y_column, z_column):
+#         class_1 = class_1[:, :, [x_column, y_column, z_column]]
+#         class_2 = class_2[:, :, [x_column, y_column, z_column]]
+
+#         if isinstance(class_1, np.ndarray):
+#             class_1 = torch.tensor(class_1, dtype=torch.float32)
+#         if isinstance(class_2, np.ndarray):
+#             class_2 = torch.tensor(class_2, dtype=torch.float32)
+        
+#         # Concatenate for normalization
+#         combined = torch.cat([class_1, class_2], dim=0)
+        
+#         # Compute mean and std per feature (across all time steps and samples)
+#         mean = combined.mean(dim=(0,1), keepdim=True)  # Mean over samples and time
+#         std = combined.std(dim=(0,1), keepdim=True)  # Std over samples and time
+        
+#         # Normalize
+#         class_1 = (class_1 - mean) / (std + 1e-8)
+#         class_2 = (class_2 - mean) / (std + 1e-8)
+#         # Store data and labels
+#         self.data = torch.cat([class_1, class_2], dim=0)
+#         self.labels = torch.cat([torch.zeros(class_1.size(0)), torch.ones(class_2.size(0))])  
+
+#     def __len__(self):
+#         return len(self.labels)
+
+#     def __getitem__(self, idx):
+#         return self.data[idx], self.labels[idx]
 
 
 
@@ -226,7 +307,7 @@ def visualize_data(inputs, labels, sample_count=5):
 
 
 class LSTMClassifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_classes, num_layers=1, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, num_classes, num_layers=3, dropout=0.2):
         super(LSTMClassifier, self).__init__()
         self.lstm = nn.LSTM(
             input_dim, 
@@ -265,3 +346,49 @@ class LSTMClassifier(nn.Module):
 #         hidden = torch.cat((hidden[-2], hidden[-1]), dim=1)  # Shape: [batch_size, hidden_dim * 2]
 #         logits = self.fc(hidden)  # Pass through fully connected layer
 #         return logits
+
+def plot_time_series(dataset, num_samples=5):
+    """
+    Plots a few samples from the dataset to visualize time series data.
+    Args:
+        dataset (RotationDataset): The dataset containing processed rotation data.
+        num_samples (int): Number of samples to plot.
+    """
+    fig, axes = plt.subplots(num_samples, figsize=(10, 2 * num_samples))
+
+    for i in range(num_samples):
+        sample = dataset.data[i].numpy()  # Convert to NumPy for easier plotting
+        timesteps = np.arange(sample.shape[0])
+
+        axes[i].plot(timesteps, sample[:, 0], label="X", linestyle='-', marker='o')
+        axes[i].plot(timesteps, sample[:, 1], label="Y", linestyle='-', marker='s')
+        axes[i].plot(timesteps, sample[:, 2], label="Z", linestyle='-', marker='d')
+
+        axes[i].set_title(f"Sample {i} - Label: {dataset.labels[i].item()}")
+        axes[i].legend()
+        axes[i].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == '__main__':
+    # set_seed(42)  # Set a fixed seed for reproducibility
+    print("PyTorch Version:", torch.__version__)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
+
+    # Data paths
+    data_folder_1 = r'C:\Users\11424\Documents\phd\pytorch_experiment_nc\Movements of Different Frequency\pwm_37'
+    data_folder_2 = r'C:\Users\11424\Documents\phd\pytorch_experiment_nc\Movements of Different Frequency\pwm_40'
+
+    # Data processing
+    t = 100
+    data_processor = DataProcessor(data_folder_1, data_folder_2, t)
+    rotation_class_1, rotation_class_2 = data_processor.build()
+
+    # Create dataset
+    x_column, y_column, z_column =1, 5, 9 # Adjust column indices if needed
+    dataset = RotationDataset(rotation_class_1, rotation_class_2, x_column, y_column, z_column)
+
+    # Plot time series
+    plot_time_series(dataset)
